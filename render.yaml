@@ -17,8 +17,6 @@ services:
         value: "true"
       - key: SITE_PASSWORD
         sync: false
-      - key: API_CODE
-        sync: false
       - key: SESSION_SECRET
         sync: false
       - key: DATABASE_URL

@@ -20,10 +20,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -34,7 +32,6 @@ DOORS_IMAGE_PATH = APP_DIR / "images.png"
 SESSION_COOKIE = "site_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 PUBLIC_PATHS = {"/login", "/health"}
-DOCS_PATHS = {"/docs", "/redoc", "/openapi.json"}
 FALLBACK_LATITUDE = 32.0841
 FALLBACK_LONGITUDE = 34.8878
 FALLBACK_PLACE = "Petah Tikva"
@@ -45,10 +42,9 @@ STATUS_POLL_SECONDS = 30
 load_dotenv(APP_DIR / ".env")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Lock reminder", docs_url=None, redoc_url=None)
+app = FastAPI(title="Lock reminder", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 PASSWORD_HASH = hashlib.sha256(os.environ.pop("SITE_PASSWORD", "").encode("utf-8")).digest()
-API_KEY = hashlib.sha256(os.environ.pop("API_CODE", "").encode("utf-8")).digest()
 SESSION_FERNET = Fernet(
     base64.urlsafe_b64encode(hashlib.sha256(os.environ.get("SESSION_SECRET", "").encode("utf-8")).digest())
 )
@@ -72,8 +68,6 @@ class WeatherView:
 @dataclass
 class PageSnapshot:
     mode: str
-    time_text: str
-    date_text: str
     unix_time: int
     timezone_name: str
     weather: WeatherView | None
@@ -97,7 +91,7 @@ class PageController:
             if queue in self._listeners:
                 self._listeners.remove(queue)
 
-    def apply_database_status(self, raw_value: str | None) -> str:
+    def apply_database_status(self, raw_value: str | None) -> None:
         mode = mode_for_status(raw_value)
         with self._lock:
             changed = self._mode != mode
@@ -105,7 +99,6 @@ class PageController:
         if changed:
             logger.info("Page mode set to %s", mode)
             self.publish()
-        return mode
 
     def publish(self) -> None:
         payload = json.dumps(snapshot_payload(self.snapshot()))
@@ -121,8 +114,6 @@ class PageController:
         weather = self._weather_for_mode(mode)
         return PageSnapshot(
             mode=mode,
-            time_text=now.strftime("%H:%M:%S"),
-            date_text=now.strftime("%A, %d %B %Y"),
             unix_time=int(now.timestamp()),
             timezone_name=clock_zone_name(),
             weather=weather,
@@ -161,8 +152,6 @@ def require_configured_secrets() -> None:
     empty_hash = hashlib.sha256(b"").digest()
     if PASSWORD_HASH == empty_hash:
         raise RuntimeError("Set SITE_PASSWORD in the env file before starting.")
-    if API_KEY == empty_hash:
-        raise RuntimeError("Set API_CODE in the env file before starting.")
     if not os.environ.get("SESSION_SECRET", "").strip():
         raise RuntimeError("Set SESSION_SECRET in the env file before starting.")
     database_url()
@@ -171,55 +160,6 @@ def require_configured_secrets() -> None:
 def password_matches(given: str) -> bool:
     given_hash = hashlib.sha256(given.encode("utf-8")).digest()
     return secrets.compare_digest(given_hash, PASSWORD_HASH)
-
-
-def api_code_matches(given: str) -> bool:
-    if not given or API_KEY == hashlib.sha256(b"").digest():
-        return False
-    given_hash = hashlib.sha256(given.encode("utf-8")).digest()
-    return secrets.compare_digest(given_hash, API_KEY)
-
-
-def basic_secret(header: str) -> str | None:
-    if not header.lower().startswith("basic "):
-        return None
-    try:
-        decoded = base64.b64decode(header.split(" ", 1)[1].strip(), validate=True).decode("utf-8")
-    except (ValueError, UnicodeError):
-        return None
-    if ":" not in decoded:
-        return None
-    return decoded.split(":", 1)[1]
-
-
-def api_code_from_request(request: Request) -> str | None:
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("bearer "):
-        code = header[7:].strip()
-        return code if api_code_matches(code) else None
-    secret = basic_secret(header)
-    if secret is not None and api_code_matches(secret):
-        return secret
-    custom = request.headers.get("x-api-code", "").strip()
-    if custom and api_code_matches(custom):
-        return custom
-    return None
-
-
-def encrypt_bytes(plain: bytes) -> dict[str, str]:
-    nonce = os.urandom(12)
-    ciphertext = AESGCM(API_KEY).encrypt(nonce, plain, None)
-    return {
-        "nonce": base64.b64encode(nonce).decode("ascii"),
-        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
-    }
-
-
-def json_response(request: Request, payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
-    if request.headers.get("x-encrypted") == "1":
-        envelope = encrypt_bytes(json.dumps(payload).encode("utf-8"))
-        return JSONResponse(envelope, status_code=status_code, headers={"X-Encrypted": "1"})
-    return JSONResponse(payload, status_code=status_code)
 
 
 def issue_session_token() -> str:
@@ -244,25 +184,9 @@ def cookie_is_secure(request: Request) -> bool:
     return request.url.scheme == "https" or forwarded == "https"
 
 
-def request_is_authorized(request: Request) -> bool:
-    api_paths = {"/state"}
-    if request.url.path in api_paths and api_code_from_request(request) is not None:
-        return True
-    supplied = request.headers.get("x-site-password", "")
-    if supplied and password_matches(supplied):
-        return True
-    return session_request(request)
-
-
 def session_request(request: Request) -> bool:
     token = request.cookies.get(SESSION_COOKIE, "")
     return bool(token) and session_is_valid(token)
-
-
-def require_encrypted_api(request: Request) -> None:
-    api_call = api_code_from_request(request) is not None and not session_request(request)
-    if api_call and request.headers.get("x-encrypted") != "1":
-        raise HTTPException(status_code=400, detail="API requests must be encrypted")
 
 
 def login_markup(failed: bool) -> str:
@@ -430,8 +354,6 @@ def snapshot_payload(snapshot: PageSnapshot) -> dict[str, Any]:
         }
     return {
         "mode": snapshot.mode,
-        "time": snapshot.time_text,
-        "date": snapshot.date_text,
         "unix": snapshot.unix_time,
         "timezone": snapshot.timezone_name,
         "weather": weather_payload,
@@ -472,22 +394,13 @@ def main_page() -> FileResponse:
     return FileResponse(INDEX_PATH)
 
 
-@app.get("/docs", response_class=HTMLResponse)
-def swagger_page() -> HTMLResponse:
-    html = (APP_DIR / "static" / "swagger.html").read_text(encoding="utf-8")
-    spec = json.dumps(custom_openapi()).replace("<", "\\u003c")
-    return HTMLResponse(html.replace("/*OPENAPI*/null", spec))
-
-
 @app.get("/state")
-def page_state(request: Request) -> JSONResponse:
-    require_encrypted_api(request)
-    return json_response(request, snapshot_payload(controller.snapshot()))
+def page_state() -> JSONResponse:
+    return JSONResponse(snapshot_payload(controller.snapshot()))
 
 
 @app.get("/updates")
 async def page_updates(request: Request) -> StreamingResponse:
-    require_encrypted_api(request)
     queue: asyncio.Queue[str] = asyncio.Queue()
     controller.add_listener(queue)
 
@@ -527,48 +440,11 @@ async def require_password(
 ) -> Response:
     if request.url.path in PUBLIC_PATHS:
         return await call_next(request)
-    if request.url.path in DOCS_PATHS:
-        if api_code_from_request(request) is None:
-            return Response(
-                status_code=401,
-                content="Swagger code required",
-                media_type="text/plain",
-                headers={"WWW-Authenticate": 'Basic realm="Swagger code"'},
-            )
-        return await call_next(request)
-    if request_is_authorized(request):
+    if session_request(request):
         return await call_next(request)
     if request.method == "GET" and request.url.path == "/":
         return RedirectResponse("/login", status_code=303)
     return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-
-
-def custom_openapi() -> dict[str, Any]:
-    if app.openapi_schema:
-        return app.openapi_schema
-    schema = get_openapi(title=app.title, version="1.0.0", routes=app.routes)
-    components = schema.setdefault("components", {})
-    schemes = components.setdefault("securitySchemes", {})
-    schemes["ApiCode"] = {"type": "http", "scheme": "bearer", "description": "API code from the env file"}
-    for path, methods in schema.get("paths", {}).items():
-        if path in PUBLIC_PATHS or path in DOCS_PATHS:
-            continue
-        for operation in methods.values():
-            if isinstance(operation, dict):
-                operation["security"] = [{"ApiCode": []}]
-    app.openapi_schema = schema
-    return schema
-
-
-app.openapi = custom_openapi
-
-
-@app.exception_handler(HTTPException)
-async def encrypted_http_error(request: Request, exc: HTTPException) -> JSONResponse:
-    detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
-    if request.headers.get("x-encrypted") == "1":
-        return json_response(request, {"detail": detail}, exc.status_code)
-    return JSONResponse({"detail": detail}, status_code=exc.status_code)
 
 
 require_configured_secrets()
