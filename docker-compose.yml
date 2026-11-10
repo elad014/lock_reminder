@@ -1,0 +1,7 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:3005"
+    env_file:
+      - .env

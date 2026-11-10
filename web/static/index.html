@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock reminder</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-scene="idle">
+  <div class="sky" aria-hidden="true">
+    <div class="sun"></div>
+    <div class="cloud cloud-a"></div>
+    <div class="cloud cloud-b"></div>
+    <div class="cloud cloud-c"></div>
+    <div class="rain"></div>
+    <div class="snow"></div>
+    <div class="flash"></div>
+    <div class="mist"></div>
+  </div>
+  <main id="panel" class="panel">
+    <p id="kicker" class="kicker">Waiting</p>
+    <h1 id="headline" class="headline">Ready</h1>
+    <p id="detail" class="detail">Send Automate for the time and weather, or mellon for the gate.</p>
+  </main>
+  <img id="doors" class="doors" alt="Doors of Durin, speak friend and enter" src="/media/doors" hidden>
+  <script src="/static/page.js?v=2"></script>
+</body>
+</html>

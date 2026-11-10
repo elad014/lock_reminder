@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock reminder</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #161616;
+      color: #f7f4ee;
+      font-family: Georgia, "Times New Roman", serif;
+    }
+    form {
+      width: min(420px, calc(100% - 2.5rem));
+    }
+    h1 {
+      margin: 0 0 0.4rem;
+      font-weight: 500;
+      font-size: 2.4rem;
+    }
+    p {
+      min-height: 1.4rem;
+      margin: 0 0 1.2rem;
+      font-family: "Segoe UI", sans-serif;
+    }
+    label {
+      display: block;
+      margin-bottom: 0.4rem;
+      font-family: "Segoe UI", sans-serif;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-size: 0.78rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.85rem 0.9rem;
+      border: 1px solid #3a3a3a;
+      border-radius: 0;
+      background: #101010;
+      color: #f7f4ee;
+      font: 1.05rem "Segoe UI", sans-serif;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.8rem 1.2rem;
+      border: 0;
+      background: #f7f4ee;
+      color: #161616;
+      font: 1rem "Segoe UI", sans-serif;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <form method="post" action="/login">
+    <h1>Enter</h1>
+    <p><!-- message --></p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Continue</button>
+  </form>
+</body>
+</html>

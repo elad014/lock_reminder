@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock reminder API</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    const apiSpec = /*OPENAPI*/null;
+    async function deriveKey(code) {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code));
+      return crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["encrypt", "decrypt"]);
+    }
+
+    function bytesToBase64(bytes) {
+      let text = "";
+      bytes.forEach(function (value) { text += String.fromCharCode(value); });
+      return btoa(text);
+    }
+
+    function base64ToBytes(text) {
+      const raw = atob(text);
+      const bytes = new Uint8Array(raw.length);
+      for (let index = 0; index < raw.length; index += 1) {
+        bytes[index] = raw.charCodeAt(index);
+      }
+      return bytes;
+    }
+
+    function bearerCode(request) {
+      const header = request.headers && (request.headers.Authorization || request.headers.authorization);
+      if (!header || header.toLowerCase().indexOf("bearer ") !== 0) {
+        return "";
+      }
+      return header.slice(7).trim();
+    }
+
+    async function encryptText(plain, code) {
+      const key = await deriveKey(code);
+      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: nonce },
+        key,
+        new TextEncoder().encode(plain)
+      );
+      return JSON.stringify({
+        nonce: bytesToBase64(nonce),
+        ciphertext: bytesToBase64(new Uint8Array(encrypted))
+      });
+    }
+
+    async function decryptText(envelope, code) {
+      const key = await deriveKey(code);
+      const plain = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: base64ToBytes(envelope.nonce) },
+        key,
+        base64ToBytes(envelope.ciphertext)
+      );
+      return new TextDecoder().decode(plain);
+    }
+
+    window.ui = SwaggerUIBundle({
+      spec: apiSpec,
+      dom_id: "#swagger",
+      persistAuthorization: true,
+      requestInterceptor: async function (request) {
+        const code = bearerCode(request);
+        window.__apiCode = code;
+        if (!code) {
+          return request;
+        }
+        request.headers["X-Encrypted"] = "1";
+        if (request.body) {
+          const plain = typeof request.body === "string" ? request.body : JSON.stringify(request.body);
+          request.body = await encryptText(plain, code);
+        }
+        return request;
+      },
+      responseInterceptor: async function (response) {
+        if (!window.__apiCode) {
+          return response;
+        }
+        let envelope = response.data;
+        if (typeof envelope === "string") {
+          try {
+            envelope = JSON.parse(envelope);
+          } catch (_error) {
+            envelope = null;
+          }
+        }
+        if (!envelope || !envelope.nonce || !envelope.ciphertext) {
+          const raw = typeof response.text === "string" ? response.text : "";
+          try {
+            envelope = JSON.parse(raw);
+          } catch (_error) {
+            return response;
+          }
+        }
+        if (!envelope || !envelope.nonce || !envelope.ciphertext) {
+          return response;
+        }
+        const plain = await decryptText(envelope, window.__apiCode);
+        response.text = plain;
+        response.body = plain;
+        try {
+          response.data = JSON.parse(plain);
+        } catch (_error) {
+          response.data = plain;
+        }
+        return response;
+      }
+    });
+  </script>
+</body>
+</html>

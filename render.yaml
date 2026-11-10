@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: lock-reminder
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: CLOCK_TIMEZONE
+        value: Asia/Jerusalem
+      - key: WEATHER_PLACE
+        value: Petah Tikva
+      - key: WEATHER_LATITUDE
+        value: "32.0841"
+      - key: WEATHER_LONGITUDE
+        value: "34.8878"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: SITE_PASSWORD
+        sync: false
+      - key: API_CODE
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
