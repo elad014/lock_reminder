@@ -25,11 +25,10 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-WEB_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = WEB_DIR.parent
-INDEX_PATH = WEB_DIR / "static" / "index.html"
-LOGIN_PATH = WEB_DIR / "static" / "login.html"
-DOORS_IMAGE_PATH = PROJECT_DIR / "images.png"
+APP_DIR = Path(__file__).resolve().parent
+INDEX_PATH = APP_DIR / "static" / "index.html"
+LOGIN_PATH = APP_DIR / "static" / "login.html"
+DOORS_IMAGE_PATH = APP_DIR / "images.png"
 SESSION_COOKIE = "site_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 PUBLIC_PATHS = {"/login", "/health"}
@@ -40,11 +39,10 @@ FALLBACK_PLACE = "Petah Tikva"
 WEATHER_MAX_AGE_SECONDS = 600
 REQUEST_TIMEOUT_SECONDS = 4
 
-load_dotenv(PROJECT_DIR / ".env")
-load_dotenv(WEB_DIR / ".env")
+load_dotenv(APP_DIR / ".env")
 
 app = FastAPI(title="Lock reminder", docs_url=None, redoc_url=None)
-app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 PASSWORD_HASH = hashlib.sha256(os.environ.pop("SITE_PASSWORD", "").encode("utf-8")).digest()
 API_KEY = hashlib.sha256(os.environ.pop("API_CODE", "").encode("utf-8")).digest()
 SESSION_FERNET = Fernet(
@@ -435,7 +433,7 @@ def main_page() -> FileResponse:
 
 @app.get("/docs", response_class=HTMLResponse)
 def swagger_page() -> HTMLResponse:
-    html = (WEB_DIR / "static" / "swagger.html").read_text(encoding="utf-8")
+    html = (APP_DIR / "static" / "swagger.html").read_text(encoding="utf-8")
     spec = json.dumps(custom_openapi()).replace("<", "\\u003c")
     return HTMLResponse(html.replace("/*OPENAPI*/null", spec))
 

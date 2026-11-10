@@ -2,13 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY web/requirements.txt /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY web /app/web
+COPY app.py /app/app.py
+COPY static /app/static
 COPY images.png /app/images.png
-
-WORKDIR /app/web
 
 ENV PORT=3005
 EXPOSE 3005
