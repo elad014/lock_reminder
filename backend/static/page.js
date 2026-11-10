@@ -111,6 +111,27 @@ function listen() {
   };
 }
 
-loadOnce();
+function initialState() {
+  const node = document.getElementById("initial-state");
+  if (!node || !node.textContent) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(node.textContent);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed;
+  } catch (_error) {
+    return null;
+  }
+}
+
+const starting = initialState();
+if (starting) {
+  applyState(starting);
+} else {
+  loadOnce();
+}
 listen();
 window.setInterval(paintClock, 1000);

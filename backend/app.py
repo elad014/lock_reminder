@@ -390,12 +390,16 @@ async def login_submit(request: Request) -> Response:
 
 
 @app.get("/")
-def main_page() -> FileResponse:
-    return FileResponse(INDEX_PATH)
+async def main_page() -> HTMLResponse:
+    await refresh_page_from_database()
+    page = INDEX_PATH.read_text(encoding="utf-8")
+    payload = json.dumps(snapshot_payload(controller.snapshot())).replace("<", "\\u003c")
+    return HTMLResponse(page.replace("/*STATE*/null", payload))
 
 
 @app.get("/state")
-def page_state() -> JSONResponse:
+async def page_state() -> JSONResponse:
+    await refresh_page_from_database()
     return JSONResponse(snapshot_payload(controller.snapshot()))
 
 
