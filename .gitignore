@@ -2,3 +2,6 @@ backend/.env
 backend/.venv
 **/__pycache__/
 **/*.pyc
+esp/old_version/config.h
+esp/esphome_version/secrets.yaml
+**/.esphome/
