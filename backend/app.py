@@ -4,11 +4,13 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 import threading
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +18,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from cryptography.exceptions import InvalidTag
+import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dotenv import load_dotenv
@@ -38,8 +40,10 @@ FALLBACK_LONGITUDE = 34.8878
 FALLBACK_PLACE = "Petah Tikva"
 WEATHER_MAX_AGE_SECONDS = 600
 REQUEST_TIMEOUT_SECONDS = 4
+STATUS_POLL_SECONDS = 30
 
 load_dotenv(APP_DIR / ".env")
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Lock reminder", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
@@ -93,17 +97,14 @@ class PageController:
             if queue in self._listeners:
                 self._listeners.remove(queue)
 
-    def apply_command(self, raw_value: str) -> str:
-        command = raw_value.strip().lower()
-        if command == "automate":
-            mode = "automate"
-        elif command == "mellon":
-            mode = "mellon"
-        else:
-            raise HTTPException(status_code=400, detail="data must be Automate or mellon")
+    def apply_database_status(self, raw_value: str | None) -> str:
+        mode = mode_for_status(raw_value)
         with self._lock:
+            changed = self._mode != mode
             self._mode = mode
-        self.publish()
+        if changed:
+            logger.info("Page mode set to %s", mode)
+            self.publish()
         return mode
 
     def publish(self) -> None:
@@ -164,6 +165,7 @@ def require_configured_secrets() -> None:
         raise RuntimeError("Set API_CODE in the env file before starting.")
     if not os.environ.get("SESSION_SECRET", "").strip():
         raise RuntimeError("Set SESSION_SECRET in the env file before starting.")
+    database_url()
 
 
 def password_matches(given: str) -> bool:
@@ -213,19 +215,6 @@ def encrypt_bytes(plain: bytes) -> dict[str, str]:
     }
 
 
-def decrypt_envelope(payload: dict[str, Any]) -> bytes:
-    nonce_text = payload.get("nonce")
-    ciphertext_text = payload.get("ciphertext")
-    if not isinstance(nonce_text, str) or not isinstance(ciphertext_text, str):
-        raise HTTPException(status_code=400, detail="Encrypted request must include nonce and ciphertext")
-    try:
-        nonce = base64.b64decode(nonce_text, validate=True)
-        ciphertext = base64.b64decode(ciphertext_text, validate=True)
-        return AESGCM(API_KEY).decrypt(nonce, ciphertext, None)
-    except (InvalidTag, ValueError, UnicodeError):
-        raise HTTPException(status_code=400, detail="Could not decrypt the request")
-
-
 def json_response(request: Request, payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
     if request.headers.get("x-encrypted") == "1":
         envelope = encrypt_bytes(json.dumps(payload).encode("utf-8"))
@@ -256,7 +245,7 @@ def cookie_is_secure(request: Request) -> bool:
 
 
 def request_is_authorized(request: Request) -> bool:
-    api_paths = {"/event", "/state"}
+    api_paths = {"/state"}
     if request.url.path in api_paths and api_code_from_request(request) is not None:
         return True
     supplied = request.headers.get("x-site-password", "")
@@ -368,14 +357,66 @@ def fetch_json(url: str) -> dict[str, Any]:
     return parsed
 
 
-def read_command(request_data: dict[str, Any], query_data: str | None) -> str:
-    if query_data:
-        return query_data
-    for key in ("data", "command", "text"):
-        value = request_data.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    raise HTTPException(status_code=400, detail="data must be Automate or mellon")
+def database_url() -> str:
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("Set DATABASE_URL in the env file before starting.")
+    return url
+
+
+def mode_for_status(raw_value: str | None) -> str:
+    if raw_value is None:
+        return "idle"
+    command = raw_value.strip().lower()
+    if command == "automate":
+        return "automate"
+    if command == "mellon":
+        return "mellon"
+    return "idle"
+
+
+def read_database_status() -> str | None:
+    with psycopg.connect(database_url(), connect_timeout=10) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT status FROM state LIMIT 1")
+            row = cursor.fetchone()
+    if row is None or not isinstance(row[0], str):
+        return None
+    return row[0]
+
+
+async def refresh_page_from_database() -> None:
+    try:
+        status = await asyncio.to_thread(read_database_status)
+    except (psycopg.Error, OSError):
+        logger.warning("Could not read the status")
+        return
+    controller.apply_database_status(status)
+
+
+async def watch_database_status(stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        await refresh_page_from_database()
+        try:
+            await asyncio.wait_for(stop.wait(), STATUS_POLL_SECONDS)
+        except TimeoutError:
+            continue
+
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    stop = asyncio.Event()
+    watcher = asyncio.create_task(watch_database_status(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher
+
+
+app.router.lifespan_context = app_lifespan
 
 
 def snapshot_payload(snapshot: PageSnapshot) -> dict[str, Any]:
@@ -471,55 +512,6 @@ async def page_updates(request: Request) -> StreamingResponse:
     )
 
 
-@app.get("/event", operation_id="read_event")
-async def read_event(request: Request) -> JSONResponse:
-    return await receive_event(request)
-
-
-@app.post("/event", operation_id="send_event")
-async def send_event(request: Request) -> JSONResponse:
-    return await receive_event(request)
-
-
-async def receive_event(request: Request) -> JSONResponse:
-    encrypted = request.headers.get("x-encrypted") == "1"
-    require_encrypted_api(request)
-    query_data = None if api_code_from_request(request) is not None else request.query_params.get("data")
-    body: dict[str, Any] = {}
-    if request.method == "POST":
-        raw_body = (await request.body()).decode("utf-8").strip()
-        if encrypted:
-            try:
-                parsed_envelope = json.loads(raw_body) if raw_body else {}
-            except json.JSONDecodeError:
-                raise HTTPException(status_code=400, detail="Encrypted request must be JSON")
-            if not isinstance(parsed_envelope, dict):
-                raise HTTPException(status_code=400, detail="Encrypted request must be a JSON object")
-            plain = decrypt_envelope(parsed_envelope).decode("utf-8").strip()
-            try:
-                parsed = json.loads(plain)
-            except json.JSONDecodeError:
-                body = {"data": plain}
-            else:
-                if isinstance(parsed, dict):
-                    body = parsed
-                elif isinstance(parsed, str):
-                    body = {"data": parsed}
-            query_data = None
-        elif raw_body:
-            try:
-                parsed = json.loads(raw_body)
-            except json.JSONDecodeError:
-                body = {"data": raw_body}
-            else:
-                if isinstance(parsed, dict):
-                    body = parsed
-                elif isinstance(parsed, str):
-                    body = {"data": parsed}
-    mode = controller.apply_command(read_command(body, query_data))
-    return json_response(request, {"mode": mode})
-
-
 @app.get("/media/doors")
 def doors_image() -> FileResponse:
     if not DOORS_IMAGE_PATH.is_file():
@@ -564,28 +556,6 @@ def custom_openapi() -> dict[str, Any]:
         for operation in methods.values():
             if isinstance(operation, dict):
                 operation["security"] = [{"ApiCode": []}]
-    event_post = schema.get("paths", {}).get("/event", {}).get("post")
-    if isinstance(event_post, dict):
-        event_post["operationId"] = "send_event"
-    if isinstance(event_post, dict):
-        event_post["requestBody"] = {
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "required": ["data"],
-                        "properties": {
-                            "data": {
-                                "type": "string",
-                                "enum": ["Automate", "mellon"],
-                                "example": "Automate",
-                            },
-                        },
-                    }
-                }
-            },
-        }
     app.openapi_schema = schema
     return schema
 

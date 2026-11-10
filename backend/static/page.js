@@ -58,7 +58,7 @@ function applyState(state) {
     document.body.dataset.scene = "idle";
     kicker.textContent = "Waiting";
     headline.textContent = "Ready";
-    detail.textContent = "Send Automate for the time and weather, or mellon for the gate.";
+    detail.textContent = "Waiting for Mellon or Automate.";
     return;
   }
 
