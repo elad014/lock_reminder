@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import http.client
 import json
 import logging
 import os
 import secrets
+import socket
+import ssl
 import threading
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -36,7 +39,7 @@ FALLBACK_LATITUDE = 32.0841
 FALLBACK_LONGITUDE = 34.8878
 FALLBACK_PLACE = "Petah Tikva"
 WEATHER_MAX_AGE_SECONDS = 600
-REQUEST_TIMEOUT_SECONDS = 4
+REQUEST_TIMEOUT_SECONDS = 12
 STATUS_POLL_SECONDS = 30
 
 load_dotenv(APP_DIR / ".env")
@@ -125,11 +128,13 @@ class PageController:
         with self._lock:
             cached = self._weather
             fetched_at = self._weather_fetched_at
-        if cached is not None and fetched_at is not None:
+        if cached is not None and fetched_at is not None and not weather_unavailable(cached):
             age_seconds = (datetime.now() - fetched_at).total_seconds()
             if age_seconds < WEATHER_MAX_AGE_SECONDS:
                 return cached
         fresh = load_weather(self._current_place())
+        if weather_unavailable(fresh):
+            return fresh
         with self._lock:
             self._weather = fresh
             self._weather_fetched_at = datetime.now()
@@ -227,6 +232,18 @@ def place_from_env() -> Place | None:
     return Place(place_name, latitude, longitude)
 
 
+def weather_unavailable(view: WeatherView) -> bool:
+    return view.status == "Weather unavailable"
+
+
+def whole_number(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    return int(value)
+
+
 def load_weather(place: Place) -> WeatherView:
     query = urlencode(
         {
@@ -238,15 +255,16 @@ def load_weather(place: Place) -> WeatherView:
     )
     try:
         payload = fetch_json(f"https://api.open-meteo.com/v1/forecast?{query}")
-    except (OSError, ValueError, TimeoutError):
+    except (OSError, ValueError, TimeoutError) as error:
+        logger.warning("Weather request failed: %s", type(error).__name__)
         return WeatherView("Weather unavailable", "cloudy", None, place.name)
     current = payload.get("current")
     if not isinstance(current, dict):
         return WeatherView("Weather unavailable", "cloudy", None, place.name)
-    code = current.get("weather_code")
-    is_day_value = current.get("is_day")
+    code = whole_number(current.get("weather_code"))
+    is_day_value = whole_number(current.get("is_day"))
     temperature = current.get("temperature_2m")
-    if not isinstance(code, int) or not isinstance(is_day_value, int):
+    if code is None or is_day_value is None:
         return WeatherView("Weather unavailable", "cloudy", None, place.name)
     status, scene = describe_weather(code, is_day_value == 1)
     temperature_c = float(temperature) if isinstance(temperature, (int, float)) else None
@@ -271,9 +289,28 @@ def describe_weather(code: int, is_day: bool) -> tuple[str, str]:
     return ("Cloudy", "cloudy")
 
 
+class IPv4HTTPSConnection(http.client.HTTPSConnection):
+    def connect(self) -> None:
+        infos = socket.getaddrinfo(self.host, self.port, socket.AF_INET, socket.SOCK_STREAM)
+        if not infos:
+            raise OSError("No IPv4 address")
+        sock = socket.create_connection(infos[0][4], self.timeout)
+        context = self._context if isinstance(self._context, ssl.SSLContext) else ssl.create_default_context()
+        self.sock = context.wrap_socket(sock, server_hostname=self.host)
+
+
+class IPv4HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(IPv4HTTPSConnection, request, context=self._context)
+
+
 def fetch_json(url: str) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": "lock-reminder"})
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "lock-reminder", "Accept": "application/json"},
+    )
+    opener = urllib.request.build_opener(IPv4HTTPSHandler())
+    with opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
         raw_body = response.read().decode("utf-8")
     parsed = json.loads(raw_body)
     if not isinstance(parsed, dict):
