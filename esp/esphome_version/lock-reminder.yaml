@@ -8,6 +8,9 @@ esp8266:
 logger:
   baud_rate: 115200
 
+api:
+  reboot_timeout: 0s
+
 ota:
   - platform: esphome
     password: lock-reminder
