@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
 import secrets
 import threading
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -30,6 +32,8 @@ LOGIN_PATH = APP_DIR / "static" / "login.html"
 DOORS_IMAGE_PATH = APP_DIR / "images.png"
 SESSION_COOKIE = "site_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
+CHALLENGE_TTL_SECONDS = 300
+CHALLENGE_PREFIX = b"challenge:"
 PUBLIC_PATHS = {"/login", "/health"}
 FALLBACK_LATITUDE = 32.0841
 FALLBACK_LONGITUDE = 34.8878
@@ -117,6 +121,8 @@ class PageController:
 
 
 controller = PageController()
+used_challenges: dict[str, float] = {}
+used_challenges_lock = threading.Lock()
 
 
 def require_configured_secrets() -> None:
@@ -128,9 +134,33 @@ def require_configured_secrets() -> None:
     database_url()
 
 
-def password_matches(given: str) -> bool:
-    given_hash = hashlib.sha256(given.encode("utf-8")).digest()
-    return secrets.compare_digest(given_hash, PASSWORD_HASH)
+def issue_login_challenge() -> str:
+    return SESSION_FERNET.encrypt(CHALLENGE_PREFIX + secrets.token_bytes(16)).decode("ascii")
+
+
+def challenge_is_valid(challenge: str) -> bool:
+    try:
+        payload = SESSION_FERNET.decrypt(challenge.encode("ascii"), ttl=CHALLENGE_TTL_SECONDS)
+    except (InvalidToken, ValueError, UnicodeError):
+        return False
+    return payload.startswith(CHALLENGE_PREFIX)
+
+
+def consume_challenge(challenge: str) -> bool:
+    now = time.monotonic()
+    with used_challenges_lock:
+        for key, expires_at in list(used_challenges.items()):
+            if expires_at <= now:
+                del used_challenges[key]
+        if challenge in used_challenges:
+            return False
+        used_challenges[challenge] = now + CHALLENGE_TTL_SECONDS
+    return True
+
+
+def proof_matches(challenge: str, proof: str) -> bool:
+    expected = hmac.new(PASSWORD_HASH, challenge.encode("ascii"), hashlib.sha256).hexdigest()
+    return secrets.compare_digest(expected.encode("ascii"), proof.strip().lower().encode("utf-8"))
 
 
 def issue_session_token() -> str:
@@ -163,7 +193,7 @@ def session_request(request: Request) -> bool:
 def login_markup(failed: bool) -> str:
     page = LOGIN_PATH.read_text(encoding="utf-8")
     message = "Wrong password." if failed else ""
-    return page.replace("<!-- message -->", message)
+    return page.replace("<!-- message -->", message).replace("__CHALLENGE__", issue_login_challenge())
 
 
 def clock_zone_name() -> str:
@@ -288,8 +318,10 @@ def login_page() -> HTMLResponse:
 @app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request) -> Response:
     raw_body = (await request.body()).decode("utf-8")
-    supplied = parse_qs(raw_body).get("password", [""])[0]
-    if not password_matches(supplied):
+    fields = parse_qs(raw_body)
+    challenge = fields.get("challenge", [""])[0]
+    proof = fields.get("proof", [""])[0]
+    if not challenge_is_valid(challenge) or not consume_challenge(challenge) or not proof_matches(challenge, proof):
         return HTMLResponse(login_markup(True), status_code=401)
     response = RedirectResponse("/", status_code=303)
     response.set_cookie(

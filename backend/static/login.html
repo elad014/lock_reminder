@@ -57,12 +57,46 @@
   </style>
 </head>
 <body>
-  <form method="post" action="/login">
+  <form id="login" method="post" action="/login">
     <h1>Enter</h1>
-    <p><!-- message --></p>
+    <p id="message"><!-- message --></p>
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <input id="challenge" name="challenge" type="hidden" value="__CHALLENGE__">
+    <input id="proof" name="proof" type="hidden">
     <button type="submit">Continue</button>
   </form>
+  <script>
+    const loginForm = document.getElementById("login");
+    const passwordInput = document.getElementById("password");
+    const challengeInput = document.getElementById("challenge");
+    const proofInput = document.getElementById("proof");
+    const messageLine = document.getElementById("message");
+    const encoder = new TextEncoder();
+
+    function toHex(buffer) {
+      return Array.from(new Uint8Array(buffer), function (byte) {
+        return byte.toString(16).padStart(2, "0");
+      }).join("");
+    }
+
+    async function loginProof(password, challenge) {
+      const passwordHash = await crypto.subtle.digest("SHA-256", encoder.encode(password));
+      const key = await crypto.subtle.importKey("raw", passwordHash, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+      const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(challenge));
+      return toHex(signature);
+    }
+
+    loginForm.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      if (!window.crypto || !crypto.subtle) {
+        messageLine.textContent = "Open this page over HTTPS to sign in.";
+        return;
+      }
+      proofInput.value = await loginProof(passwordInput.value, challengeInput.value);
+      passwordInput.value = "";
+      loginForm.submit();
+    });
+  </script>
 </body>
 </html>
