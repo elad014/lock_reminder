@@ -167,15 +167,21 @@ body[data-scene="idle"] .sky {
   background: #161616;
 }
 
-.panel {
+.stage {
   position: relative;
-  z-index: 2;
+  z-index: 4;
   height: 100vh;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+  align-items: flex-start;
   padding: 8vh 7vw 10vh;
+  pointer-events: none;
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.28);
+}
+
+.panel {
+  pointer-events: none;
 }
 
 .kicker {
@@ -200,11 +206,12 @@ body[data-scene="idle"] .sky {
   font-size: clamp(1.05rem, 2vw, 1.4rem);
 }
 
-body[data-scene="snow"] .panel,
-body[data-scene="fog"] .panel,
-body[data-scene="partly-cloudy"] .panel,
-body[data-scene="cloudy"] .panel,
-body[data-scene="clear-day"] .panel {
+body[data-scene="snow"] .stage,
+body[data-scene="fog"] .stage,
+body[data-scene="partly-cloudy"] .stage,
+body[data-scene="cloudy"] .stage,
+body[data-scene="clear-day"] .stage,
+body[data-mode="mellon"] .stage {
   color: #1b2430;
   text-shadow: none;
 }
@@ -221,6 +228,71 @@ body[data-scene="clear-day"] .panel {
 
 .doors[hidden] {
   display: none;
+}
+
+.click {
+  position: relative;
+  width: 7.8rem;
+  height: 2.9rem;
+  margin: 0 0 1.35rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px currentColor;
+  color: inherit;
+  font: 600 0.78rem "Segoe UI", sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-shadow: none;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.click-word,
+.click-knob {
+  position: absolute;
+  pointer-events: none;
+}
+
+.click-word {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.click-word-off {
+  right: 0.95rem;
+}
+
+.click-word-on {
+  left: 1.05rem;
+  display: none;
+}
+
+.click-knob {
+  top: 0.3rem;
+  left: 0.3rem;
+  width: 2.3rem;
+  height: 2.3rem;
+  border-radius: 50%;
+  background: currentColor;
+  transition: transform 0.2s ease;
+}
+
+.click[aria-pressed="true"] .click-knob {
+  transform: translateX(4.9rem);
+}
+
+.click[aria-pressed="true"] .click-word-off {
+  display: none;
+}
+
+.click[aria-pressed="true"] .click-word-on {
+  display: block;
+}
+
+.click:disabled {
+  cursor: default;
 }
 
 body[data-mode="mellon"] {
@@ -244,7 +316,7 @@ body[data-mode="mellon"] .sky {
 }
 
 @media (max-width: 700px) {
-  .panel {
+  .stage {
     padding: 6vh 6vw 8vh;
   }
 

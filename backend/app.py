@@ -256,6 +256,13 @@ def read_database_status() -> str | None:
     return row[0]
 
 
+def set_click_flag() -> bool:
+    with psycopg.connect(database_url(), connect_timeout=10) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE state SET click = 1 WHERE ctid = (SELECT ctid FROM state LIMIT 1)")
+            return cursor.rowcount == 1
+
+
 async def refresh_page_from_database() -> None:
     try:
         status = await asyncio.to_thread(read_database_status)
@@ -342,6 +349,18 @@ async def main_page() -> HTMLResponse:
     page = INDEX_PATH.read_text(encoding="utf-8")
     payload = json.dumps(snapshot_payload(controller.snapshot())).replace("<", "\\u003c")
     return HTMLResponse(page.replace("/*STATE*/null", payload))
+
+
+@app.post("/click")
+async def mark_click() -> JSONResponse:
+    try:
+        updated = await asyncio.to_thread(set_click_flag)
+    except (psycopg.Error, OSError):
+        logger.warning("Could not set click")
+        raise HTTPException(status_code=503, detail="Could not set click") from None
+    if not updated:
+        raise HTTPException(status_code=404, detail="No state row")
+    return JSONResponse({"click": 1})
 
 
 @app.get("/state")

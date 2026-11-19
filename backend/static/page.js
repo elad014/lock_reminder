@@ -3,6 +3,7 @@ const kicker = document.getElementById("kicker");
 const headline = document.getElementById("headline");
 const detail = document.getElementById("detail");
 const doors = document.getElementById("doors");
+const clickButton = document.getElementById("click");
 
 let shown = null;
 let clockMark = null;
@@ -193,6 +194,38 @@ async function loadOnce() {
   }
 }
 
+function setClickPressed(pressed) {
+  if (!clickButton) {
+    return;
+  }
+  clickButton.setAttribute("aria-pressed", pressed ? "true" : "false");
+}
+
+async function sendClick() {
+  if (!clickButton || clickButton.disabled) {
+    return;
+  }
+  clickButton.disabled = true;
+  setClickPressed(true);
+  try {
+    const response = await fetch("/click", { method: "POST", cache: "no-store" });
+    if (response.status === 401) {
+      window.location.assign("/login");
+      return;
+    }
+    if (!response.ok) {
+      setClickPressed(false);
+    }
+  } catch (_error) {
+    setClickPressed(false);
+  } finally {
+    clickButton.disabled = false;
+    window.setTimeout(function () {
+      setClickPressed(false);
+    }, 700);
+  }
+}
+
 function listen() {
   const source = new EventSource("/updates");
   source.onmessage = function (event) {
@@ -228,6 +261,11 @@ if (starting) {
   applyState(starting);
 } else {
   loadOnce();
+}
+if (clickButton) {
+  clickButton.addEventListener("click", function () {
+    sendClick();
+  });
 }
 listen();
 window.setInterval(paintClock, 1000);

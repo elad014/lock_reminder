@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lock reminder</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body data-scene="idle">
   <div class="sky" aria-hidden="true">
@@ -17,13 +17,20 @@
     <div class="flash"></div>
     <div class="mist"></div>
   </div>
-  <main id="panel" class="panel">
-    <p id="kicker" class="kicker">Waiting</p>
-    <h1 id="headline" class="headline">Ready</h1>
-    <p id="detail" class="detail">Waiting for Mellon or Automate.</p>
-  </main>
+  <div class="stage">
+    <button id="click" class="click" type="button" aria-pressed="false">
+      <span class="click-word click-word-off">Off</span>
+      <span class="click-word click-word-on">On</span>
+      <span class="click-knob"></span>
+    </button>
+    <main id="panel" class="panel">
+      <p id="kicker" class="kicker">Waiting</p>
+      <h1 id="headline" class="headline">Ready</h1>
+      <p id="detail" class="detail">Waiting for Mellon or Automate.</p>
+    </main>
+  </div>
   <img id="doors" class="doors" alt="Doors of Durin, speak friend and enter" src="/media/doors" hidden>
   <script id="initial-state" type="application/json">/*STATE*/null</script>
-  <script src="/static/page.js?v=5"></script>
+  <script src="/static/page.js?v=7"></script>
 </body>
 </html>
