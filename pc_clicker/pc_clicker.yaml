@@ -1,0 +1,109 @@
+# Board: Espressif Generic ESP8266 ESP-01 1M
+
+esphome:
+  name: buttonline
+  friendly_name: buttonline
+
+esp8266:
+  board: esp01_1m
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: buttonline Fallback Hotspot
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+text_sensor:
+  - platform: template
+    name: "WiFi Scan Results"
+    id: wifi_scan_results
+    update_interval: never
+
+http_request:
+  verify_ssl: false
+  timeout: 10s
+
+switch:
+  - platform: gpio
+    id: click_pin
+    name: "Click Pin"
+    restore_mode: ALWAYS_OFF
+    pin:
+      number: GPIO2
+      inverted: true
+      mode:
+        output: true
+        open_drain: true
+
+script:
+  - id: pulse_click
+    mode: single
+    then:
+      - switch.turn_on: click_pin
+      - delay: 1s
+      - switch.turn_off: click_pin
+
+interval:
+  - interval: 60s
+    then:
+      - lambda: |-
+          ESP_LOGI("alive_test", "Buttonline is alive and working!");
+          if (WiFi.status() == WL_CONNECTED) {
+            ESP_LOGI("alive_test", "Current IP: %s", WiFi.localIP().toString().c_str());
+          }
+
+  - interval: 5s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - not:
+                  script.is_running: pulse_click
+          then:
+            - http_request.post:
+                url: https://ep-cool-water-be4054d3.c-9.us-east-2.aws.neon.tech/sql
+                request_headers:
+                  Content-Type: application/json
+                  Neon-Connection-String: !secret neon_connection_string
+                json:
+                  query: "UPDATE state SET click = 0 WHERE click = 1 RETURNING click"
+                capture_response: true
+                max_response_buffer_size: 2048
+                on_response:
+                  then:
+                    - if:
+                        condition:
+                          lambda: |-
+                            if (response->status_code != 200) {
+                              ESP_LOGW("neon", "HTTP %d: %s", response->status_code, body.c_str());
+                              return false;
+                            }
+                            bool claimed = false;
+                            json::parse_json(body, [&claimed](JsonObject root) -> bool {
+                              claimed = root["rowCount"].as<int>() == 1;
+                              return true;
+                            });
+                            return claimed;
+                        then:
+                          - logger.log: "click = 1 -> pulsing GPIO2 and reset to 0"
+                          - script.execute: pulse_click
+                on_error:
+                  then:
+                    - logger.log:
+                        level: WARN
+                        format: "Neon request failed"

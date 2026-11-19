@@ -4,4 +4,5 @@ backend/.venv
 **/*.pyc
 esp/old_version/config.h
 esp/esphome_version/secrets.yaml
+pc_clicker/secrets.yaml
 **/.esphome/
