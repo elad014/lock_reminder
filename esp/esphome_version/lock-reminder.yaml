@@ -36,6 +36,7 @@ binary_sensor:
       number: GPIO2
       mode:
         input: true
+        pullup: true
     filters:
       - delayed_on_off: 50ms
     on_press:
